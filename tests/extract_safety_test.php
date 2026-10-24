@@ -274,6 +274,125 @@ class ezcArchiveExtractSafetyTest extends ezcArchiveTestCase
         self::assertSame( "4755", sprintf( "%o", fileperms( $this->target . "/setuid" ) & 07777 ) );
     }
 
+    public function testUnsafeEntriesAreSkippedOnRequest()
+    {
+        $path = "/tmp/ezcArchive-absolute-" . getmypid() . ".txt";
+        $blocks = ezcArchiveTarTestBuilder::file( "../escaped.txt", "escaped" ) .
+                  ezcArchiveTarTestBuilder::file( "a/../inside.txt", "inside" ) .
+                  ezcArchiveTarTestBuilder::file( $path, "absolute" ) .
+                  ezcArchiveTarTestBuilder::header( "hardlink", "1", 0, "../outside/secret.txt", "0644", ezcArchiveTarTestBuilder::MAGIC_USTAR ) .
+                  ezcArchiveTarTestBuilder::file( "good.txt", "good" );
+
+        try
+        {
+            $this->extractTar( $blocks, new ezcArchiveOptions( array( "skipUnsafeEntries" => true ) ) );
+            self::assertFileDoesNotExist( $path );
+        }
+        finally
+        {
+            @unlink( $path );
+        }
+
+        self::assertSame( "good", file_get_contents( $this->target . "/good.txt" ) );
+        self::assertSame( array( ".", "..", "good.txt" ), scandir( $this->target ) );
+        self::assertFileDoesNotExist( $this->dir . "/escaped.txt" );
+    }
+
+    public function testWriteThroughSymlinkIsSkippedOnRequest()
+    {
+        $this->skipWithoutSymlinks();
+
+        $blocks = ezcArchiveTarTestBuilder::header( "lnk", "2", 0, "../outside", "0777", ezcArchiveTarTestBuilder::MAGIC_USTAR ) .
+                  ezcArchiveTarTestBuilder::file( "lnk/new.txt", "overwritten" ) .
+                  ezcArchiveTarTestBuilder::header( "hardlink", "1", 0, "lnk/secret.txt", "0644", ezcArchiveTarTestBuilder::MAGIC_USTAR ) .
+                  ezcArchiveTarTestBuilder::file( "good.txt", "good" );
+
+        $this->extractTar( $blocks, new ezcArchiveOptions( array( "skipUnsafeEntries" => true ) ) );
+        self::assertSame( array( ".", "..", "secret.txt" ), scandir( $this->dir . "/outside" ) );
+        self::assertSame( array( ".", "..", "good.txt", "lnk" ), scandir( $this->target ) );
+    }
+
+    public function testExtractCurrentReturnsFalseForSkippedEntry()
+    {
+        $blocks = ezcArchiveTarTestBuilder::file( "../escaped.txt", "escaped" );
+        $options = new ezcArchiveOptions( array( "skipUnsafeEntries" => true ) );
+        $archive = ezcArchive::open( ezcArchiveTarTestBuilder::write( $this->dir . "/archive.tar", $blocks ), ezcArchive::TAR_USTAR, $options );
+
+        self::assertFalse( $archive->extractCurrent( $this->target ) );
+        self::assertFileDoesNotExist( $this->dir . "/escaped.txt" );
+    }
+
+    public function testPermissionsWithOnlySpecialBitsAreApplied()
+    {
+        if ( substr( php_uname( 's' ), 0, 7 ) == 'Windows' )
+        {
+            self::markTestSkipped( "Windows has no Unix permissions." );
+        }
+
+        // Mode 4000 is 0 without the setuid bit. The file must not keep the
+        // default permissions instead.
+        $this->extractTar( ezcArchiveTarTestBuilder::file( "setuid-only", "x", "4000" ) );
+        clearstatcache();
+        self::assertSame( "0", sprintf( "%o", fileperms( $this->target . "/setuid-only" ) & 07777 ) );
+    }
+
+    public function testEntryWithoutPermissionsKeepsDefaultPermissions()
+    {
+        // ZIP archives made on Windows store no Unix permissions at all.
+        $this->extractTar( ezcArchiveTarTestBuilder::file( "no-mode", "x", "0000" ) );
+        clearstatcache();
+        self::assertNotSame( 0, fileperms( $this->target . "/no-mode" ) & 07777 );
+        self::assertSame( "x", file_get_contents( $this->target . "/no-mode" ) );
+    }
+
+    public static function pathChecks()
+    {
+        return array(
+            // path, Windows, refused
+            array( "a/b.txt", false, false ),
+            array( "a/b.txt", true, false ),
+            array( "./a.txt", true, false ),
+            array( "a..b/c...txt", true, false ),
+            array( "...", false, false ),
+            array( "a/.. /b.txt", false, false ),
+            array( "a/b:c.txt", false, false ),
+            array( "../a.txt", false, true ),
+            array( "a/../b.txt", false, true ),
+            array( "/a.txt", false, true ),
+            array( "a\\..\\..\\b.txt", true, true ),
+            array( "\\a.txt", true, true ),
+            array( "C:a.txt", true, true ),
+            array( "a/.. /b.txt", true, true ),
+            array( "a/... /b.txt", true, true ),
+            array( "a/.../b.txt", true, true ),
+            array( "a/ ./b.txt", true, true ),
+            array( "a/b.txt:stream", true, true ),
+            array( "a/b:c/d.txt", true, true ),
+        );
+    }
+
+    /**
+     * @dataProvider pathChecks
+     */
+    public function testCheckRelativePath( $path, $isWindows, $refused )
+    {
+        $archive = ezcArchive::open( ezcArchiveTarTestBuilder::write( $this->dir . "/archive.tar", ezcArchiveTarTestBuilder::file( "a.txt", "a" ) ), ezcArchive::TAR_USTAR );
+        $check = Closure::bind( function ( $path, $isWindows )
+        {
+            $this->checkRelativePath( $path, $isWindows );
+        }, $archive, get_class( $archive ) );
+
+        try
+        {
+            $check( $path, $isWindows );
+            self::assertFalse( $refused, "'$path' was accepted." );
+        }
+        catch ( ezcArchiveValueException $e )
+        {
+            self::assertTrue( $refused, "'$path' was refused: " . $e->getMessage() );
+        }
+    }
+
     public static function suite()
     {
         return new \PHPUnit\Framework\TestSuite( __CLASS__ );
