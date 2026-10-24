@@ -255,6 +255,22 @@ class ezcArchiveTarExtensionHeaderTest extends ezcArchiveTestCase
         self::assertSame( array( "sized.txt" => "sized", "second.txt" => "second" ), $this->readEntries( $blocks, $type ) );
     }
 
+    /**
+     * @dataProvider readers
+     */
+    public function testEmptyPaxRecordsAreIgnored( $type )
+    {
+        $records = ezcArchiveTarTestBuilder::paxRecord( "path", "" ) .
+                   ezcArchiveTarTestBuilder::paxRecord( "linkpath", "" ) .
+                   ezcArchiveTarTestBuilder::paxRecord( "size", "" );
+        $blocks = ezcArchiveTarTestBuilder::extension( "x", $records ) .
+                  ezcArchiveTarTestBuilder::file( "from-header.txt", "header" ) .
+                  ezcArchiveTarTestBuilder::extension( "x", ezcArchiveTarTestBuilder::paxRecord( "linkpath", "" ) ) .
+                  ezcArchiveTarTestBuilder::header( "link", "2", 0, "target.txt" );
+
+        self::assertSame( array( "from-header.txt" => "header", "link" => "-> target.txt" ), $this->readEntries( $blocks, $type ) );
+    }
+
     public static function malformedPaxRecords()
     {
         return array(

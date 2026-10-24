@@ -283,7 +283,9 @@ class ezcArchiveUstarHeader extends ezcArchiveV7Header
      * Applies the values of PAX extended header records to this header.
      *
      * Only the records that this implementation can represent are used:
-     * path, linkpath, size, uid and gid.
+     * path, linkpath, size, uid and gid. A record with an empty value is
+     * ignored: POSIX defines it as removing the keyword, so the value from
+     * the header itself applies (as for an empty GNU long name).
      *
      * @throws ezcArchiveException if a numeric record is not a number.
      * @param array(string=>string) $records
@@ -293,6 +295,11 @@ class ezcArchiveUstarHeader extends ezcArchiveV7Header
     {
         foreach ( $records as $key => $value )
         {
+            if ( $value === "" )
+            {
+                continue;
+            }
+
             switch ( $key )
             {
                 case "path":
